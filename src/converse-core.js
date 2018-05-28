@@ -238,6 +238,18 @@
 
     _converse.router = new Backbone.Router();
 
+    
+    _converse.database = {
+        'id': "converse-database",
+        'description': "The IndexedDB database for the Converse",
+        'migrations' : [{
+            'version': '1.0',
+            'migrate': function (transaction, next) {
+                var store = transaction.db.createObjectStore("");
+            }
+        }]
+    }
+
 
     _converse.initialize = function (settings, callback) {
         "use strict";
@@ -335,7 +347,7 @@
             show_only_online_users: false,
             show_send_button: false,
             sid: undefined,
-            storage: 'session',
+            storage: 'session', // Can be 'session', 'local' or 'indexeddb'
             strict_plugin_dependencies: false,
             synchronize_availability: true,
             trusted: true,

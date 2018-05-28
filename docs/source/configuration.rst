@@ -1237,7 +1237,7 @@ storage
 
 * Default: ``session``
 
-Valid options: ``session``, ``local``.
+Valid options: ``session``, ``local``, ``indexeddb``
 
 This option determines the type of `browser storage <https://developer.mozilla.org/en-US/docs/Web/Guide/API/DOM/Storage>`_
 (``localStorage`` or ``sessionStorage``) used by converse.js to cache user data.

@@ -35,6 +35,7 @@
     "almond": "~0.3.3",
     "awesomplete-avoid-xss": "^1.1.2",
     "backbone": "1.3.3",
+    "backbone-indexeddb": "superfeedr/indexeddb-backbonejs-adapter#master",
     "backbone.browserStorage": "0.0.3",
     "backbone.nativeview": "^0.3.3",
     "backbone.overview": "1.0.2",

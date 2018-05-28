@@ -27,6 +27,7 @@ require.config({
         "backbone.orderedlistview": "node_modules/backbone.overview/dist/backbone.orderedlistview",
         "backbone.overview":        "node_modules/backbone.overview/dist/backbone.overview",
         "backbone.vdomview":        "node_modules/backbone.vdomview/dist/backbone.vdomview",
+        "backbone.indexeddb":       "node_modules/backbone.browserStorage/backbone-indexeddb",
         "bootstrap":                "node_modules/bootstrap.native/dist/bootstrap-native-v4",
         "emojione":                 "node_modules/emojione/lib/js/emojione",
         "es6-promise":              "node_modules/es6-promise/dist/es6-promise.auto",
@@ -144,10 +145,12 @@ require.config({
 
     // define module dependencies for modules not using define
     shim: {
+        'awesomplete':              { exports: 'Awesomplete'},
+        'backbone':                 { deps: ['lodash'], exports: 'Backbone' },
+        'backbone.indexeddb':       { deps: ['backbone'] },
         'backbone.orderedlistview': { deps: ['backbone.nativeview'] },
         'backbone.overview':        { deps: ['backbone.nativeview'] },
         'backbone.vdomview':        { deps: ['backbone.nativeview'] },
-        'awesomplete':              { exports: 'Awesomplete'},
         'emojione':                 { exports: 'emojione'},
         'xss':  {
             'init': function (xss_noconflict) {
