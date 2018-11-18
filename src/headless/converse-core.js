@@ -69,7 +69,43 @@ const BOSH_WAIT = 59;
  */
 const _converse = {
     'templates': {},
-    'promises': {}
+    'promises': {},
+
+    onDomainDiscovered (ev) {
+        const xrd = ev.target.responseXML.documentElement;
+        if (xrd.nodeName != "XRD" || xrd.namespaceURI != "http://docs.oasis-open.org/ns/xri/xrd-1.0") {
+            _converse.log("Could not discover XEP-0156 connection methods", Strophe.LogLevel.WARN);
+            return initConnection();
+        }
+        const bosh_methods = [];
+        const websocket_methods = [];
+        for (let i = 0; i < xrd.children.length; i++) {
+            const child = xrd.children[i];
+            if (child.nodeName != "Link" || child.namespaceURI != "http://docs.oasis-open.org/ns/xri/xrd-1.0") {
+                continue;
+            }
+            const rel = child.getAttributeNS(null, "rel");
+            const href = child.getAttributeNS(null, "href");
+            if (rel == "urn:xmpp:alt-connections:xbosh") {
+                bosh_methods.push(href);
+            } else if (rel == "urn:xmpp:alt-connections:websocket") {
+                websocket_methods.push(href);
+            }
+        }
+        if (websocket_methods.length > 0) {
+            _converse.websocket_url = websocket_methods[0];
+        }
+        if (bosh_methods.length > 0) {
+            _converse.bosh_service_url = bosh_methods[0];
+        }
+        if (bosh_methods.length === 0 && websocket_methods.length === 0) {
+            _converse.log(
+                "onDomainDiscovered: neither BOSH nor WebSocket connection methods have been specified with XEP-0156.",
+                Strophe.LogLevel.WARN
+            );
+        }
+        initConnection();
+    }
 }
 
 _converse.VERSION_NAME = "v4.0.5";
@@ -218,7 +254,8 @@ _converse.default_settings = {
     root: window.document,
     sid: undefined,
     strict_plugin_dependencies: false,
-    trusted: true,
+    trusted: false,
+    use_xep_0156: false,
     view_mode: 'overlayed', // Choices are 'overlayed', 'fullscreen', 'mobile'
     websocket_url: undefined,
     whitelisted_plugins: []
@@ -270,10 +307,6 @@ _converse.log = function (message, level, style='') {
         }
     }
 };
-
-Strophe.log = function (level, msg) { _converse.log(level+' '+msg, level); };
-Strophe.error = function (msg) { _converse.log(msg, Strophe.LogLevel.ERROR); };
-
 
 _converse.__ = function (str) {
     /* Translate the given string based on the current locale.
@@ -395,9 +428,104 @@ _converse.initConnection = function () {
 }
 
 
-function setUpXMLLogging () {
+async function discoverConnectionMethods () {
+    const options = {
+        'method': 'POST',
+        'mode': 'cors',
+        'headers': {
+            'Accept': 'application/xrd+xml, text/xml'
+        }
+    };
+    let response;
+    try {
+        response = await fetch(`https://${_converse.session.get('domain')}/.well-known/host-meta`);
+    } catch (e) {
+        _converse.log(e, Strophe.LogLevel.ERROR);
+    }
+    if (response.status >= 200 && response.status < 400) {
+        this.onDomainDiscovered(response);
+    } else {
+        _converse.log("Could not discover XEP-0156 connection methods", Strophe.LogLevel.WARN);
+    }
+}
+
+
+async function initSession () {
+    const id = b64_sha1('converse.bosh-session');
+    _converse.session = new Backbone.Model({id});
+    _converse.session.browserStorage = new Backbone.BrowserStorage.session(id);
+    await new Promise((success, error) => _converse.session.fetch({success, error}));
+    _converse.emit('sessionInitialized');
+}
+
+function setConnectionProtocol () {
+    if (_converse.websocket_url) {
+        _converse.connection.service = _converse.websocket_url;
+        _converse.connection._proto = new Strophe.Websocket(_converse.connection);
+    } else if (_converse.bosh_service_url) {
+        _converse.connection.service = _converse.bosh_service_url;
+        _converse.connection = new Strophe.Bosh(_converse.converse.connection)
+        _converse.connection.options = _.assignIn(_converse.connection_options, {'keepalive': _converse.keepalive})
+    } else {
+        throw new Error("connection: This browser does not support websockets and bosh_service_url wasn't specified.");
+    }
+}
+
+function initConnection () {
+    /* Initialize a new Strophe.Connection object, used for the duration of our
+     * session (also across reconnects).
+     */
+    if (!_converse.connection) {
+        if (!_converse.bosh_service_url && ! _converse.websocket_url && !_converse.use_xep_0156) {
+            throw new Error("initConnection: you must set use_xep_0156 to true or supply a value for the bosh_service_url or websocket_url");
+        }
+        if (('WebSocket' in window || 'MozWebSocket' in window) && _converse.websocket_url) {
+            _converse.connection = new Strophe.Connection(_converse.websocket_url, _converse.connection_options);
+        } else if (_converse.bosh_service_url) {
+            _converse.connection = new Strophe.Connection(
+                _converse.bosh_service_url,
+                _.assignIn(_converse.connection_options, {'keepalive': _converse.keepalive})
+            );
+        } else {
+            _converse.connection = new Strophe.Connection('');
+        }
+    }
+    initLogging();
+    _converse.emit('connectionInitialized');
+}
+
+
+async function initConnectionWithXEP0156 () {
+    /* Initialize a new Strophe.Connection object, used for the duration of our
+     * session (also across reconnects).
+     */
+    if (_converse.use_xep_0156) {
+        await discoverConnectionMethods();
+    }
+    if (!_converse.bosh_service_url && ! _converse.websocket_url) {
+        throw new Error("connection: you must supply a value for either the bosh_service_url or websocket_url or both.");
+    }
+    if (('WebSocket' in window || 'MozWebSocket' in window) && _converse.websocket_url) {
+        _converse.connection = new Strophe.Connection(_converse.websocket_url, _converse.connection_options);
+    } else if (_converse.bosh_service_url) {
+        _converse.connection = new Strophe.Connection(
+            _converse.bosh_service_url,
+            _.assignIn(_converse.connection_options, {'keepalive': _converse.keepalive})
+        );
+    } else {
+        throw new Error("connection: _converse browser does not support websockets and bosh_service_url wasn't specified.");
+    }
+    initLogging();
+    _converse.emit('connectionInitialized');
+}
+
+
+function initLogging () {
     Strophe.log = function (level, msg) {
-        _converse.log(msg, level);
+        _converse.log(level+' '+msg, level);
+    };
+    Strophe.error = function (msg) {
+        _converse.log(msg, Strophe.LogLevel.ERROR);
     };
     if (_converse.debug) {
         _converse.connection.xmlInput = function (body) {
@@ -410,11 +538,12 @@ function setUpXMLLogging () {
 }
 
 
-function finishInitialization () {
+async function finishInitialization () {
     initPlugins();
     initClientConfig();
-    _converse.initConnection();
-    setUpXMLLogging();
+    initConnection();
+    await initSession();
+
     _converse.logIn();
     _converse.registerGlobalEventHandlers();
     if (!Backbone.history.started) {
@@ -441,7 +570,9 @@ function cleanup () {
     }
     delete _converse.controlboxtoggle;
     delete _converse.chatboxviews;
-    _converse.connection.reset();
+    if (_converse.connection) {
+        _converse.connection.reset();
+    }
     _converse.stopListening();
     _converse.tearDown();
     delete _converse.config;
@@ -450,7 +581,7 @@ function cleanup () {
 }
 
 
-_converse.initialize = function (settings, callback) {
+_converse.initialize = async function (settings, callback) {
     settings = !_.isUndefined(settings) ? settings : {};
     const init_promise = u.getResolveablePromise();
     _.each(PROMISES, addPromise);
@@ -780,14 +911,6 @@ _converse.initialize = function (settings, callback) {
     }
 
 
-    this.initSession = function () {
-        const id = b64_sha1('converse.bosh-session');
-        _converse.session = new Backbone.Model({id});
-        _converse.session.browserStorage = new Backbone.BrowserStorage.session(id);
-        _converse.session.fetch();
-        _converse.emit('sessionInitialized');
-    };
-
     this.clearSession = function () {
         if (!_converse.config.get('trusted')) {
             window.localStorage.clear();
@@ -914,6 +1037,10 @@ _converse.initialize = function (settings, callback) {
         _converse.bare_jid = Strophe.getBareJidFromJid(_converse.connection.jid);
         _converse.resource = Strophe.getResourceFromJid(_converse.connection.jid);
         _converse.domain = Strophe.getDomainFromJid(_converse.connection.jid);
+        _converse.session.save({
+            'jid': _converse.jid,
+            'domain': _converse.domain
+        });
         _converse.emit('setUserJID');
     };
 
@@ -923,7 +1050,6 @@ _converse.initialize = function (settings, callback) {
          */
         _converse.connection.flush(); // Solves problem of returned PubSub BOSH response not received by browser
         _converse.setUserJID();
-        _converse.initSession();
         _converse.enableCarbons();
         _converse.initStatus(reconnecting)
     };
@@ -1069,8 +1195,13 @@ _converse.initialize = function (settings, callback) {
                 _converse.log(msg);
             }
         }
+        if (!this.session.get('domain')) {
+            // We can't restore a session without knowing the session's details
+            return false;
+        }
         try {
-            this.connection.restore(this.jid, this.onConnectStatusChanged);
+            initConnection();
+            _converse.connection.restore(this.jid, _converse.onConnectStatusChanged);
             return true;
         } catch (e) {
             _converse.log(
@@ -1164,7 +1295,7 @@ _converse.initialize = function (settings, callback) {
             const password = _.isNil(credentials) ? (_converse.connection.pass || this.password) : credentials.password;
             if (!password) {
                 if (this.auto_login) {
-                    throw new Error("initConnection: If you use auto_login and "+
+                    throw new Error("autoLogin: If you use auto_login and "+
                         "authentication='login' then you also need to provide a password.");
                 }
                 _converse.setDisconnectionCause(Strophe.Status.AUTHFAIL, undefined, true);
@@ -1220,22 +1351,20 @@ _converse.initialize = function (settings, callback) {
         this.connection = settings.connection;
     }
 
-    if (!_.isUndefined(_converse.connection) &&
-            _converse.connection.service === 'jasmine tests') {
-        finishInitialization();
+    if (!_.isUndefined(_converse.connection) && _converse.connection.service === 'jasmine tests') {
+        await finishInitialization();
         return _converse;
     } else if (_.isUndefined(i18n)) {
-        finishInitialization();
+        await finishInitialization();
     } else {
-        i18n.fetchTranslations(
+        await i18n.fetchTranslations(
             _converse.locale,
             _converse.locales,
-            u.interpolate(_converse.locales_url, {'locale': _converse.locale}))
-        .catch(e => _converse.log(e.message, Strophe.LogLevel.FATAL))
-        .then(finishInitialization)
-        .catch(_.partial(_converse.log, _, Strophe.LogLevel.FATAL));
+            u.interpolate(_converse.locales_url, {'locale': _converse.locale})
+        )
+        await finishInitialization();
     }
-    return init_promise;
+    await init_promise;
 };
 
 /**
@@ -1265,7 +1394,7 @@ _converse.api = {
          * @returns {boolean} Whether there is an established connection or not.
          */
         'connected' () {
-            return _converse.connection && _converse.connection.connected || false;
+            return _converse.connection.connected || false;
         },
         /**
          * Terminates the connection.
@@ -1535,7 +1664,7 @@ _converse.api = {
          * @example _converse.api.tokens.get('rid');
          */
         'get' (id) {
-            if (!_converse.expose_rid_and_sid || _.isUndefined(_converse.connection)) {
+            if (!_converse.expose_rid_and_sid) {
                 return null;
             }
             if (id.toLowerCase() === 'rid') {
